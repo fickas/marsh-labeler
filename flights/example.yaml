@@ -1,0 +1,36 @@
+# One flight = one of these. Point paths at your pipeline outputs.
+name: 30Jun23_WEL_Mid
+crs: EPSG:26919
+gsd_cm: 4.0
+
+review_gpkg: /data/30jun23/abstain_review.gpkg   # build_abstain_review_polygons() output
+ortho_path: /data/30jun23/ortho.tif              # multiband ortho, for chips
+superpixel_path: /data/30jun23/superpixels.tif   # uint32 superpixel-id raster
+abstain_path: /data/30jun23/abstain.tif
+softmax_path: /data/30jun23/softmax.tif          # optional; enables model_probs
+
+context_pad_px: 64        # surrounding context rendered around each container
+replication_target: 1     # >1 = send to multiple labelers for agreement
+
+# Class scheme for THIS flight. Edit freely as the scheme evolves on real data --
+# nothing in the code assumes these ids or names. Omit the whole block to fall
+# back to the synthetic default in app/constants.py.
+classes:
+  names:
+    0: other
+    1: healthy_bank
+    2: eroding_non_crab
+    3: crab_edge
+    4: crab_platform
+    5: collapsed
+  damage: [3, 4, 5]        # which classes count toward the AREA metric
+  ignore_index: 255
+
+views:
+  - name: truecolor
+    bands: [3, 2, 1]      # MicaSense band order is B,G,R,RE,NIR -> R=3,G=2,B=1
+  - name: cir
+    bands: [5, 3, 2]      # NIR,R,G -- vegetation pops, channels go dark
+  - name: geomorphic
+    source_path: /data/30jun23/tpi_small.tif
+    cmap: viridis

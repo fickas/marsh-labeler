@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# secrets / local config
+.env
+
+# rendered chips (live in object storage, not git)
+_chips/
+
+# data / pipeline outputs (large, binary)
+*.tif
+*.tiff
+*.gpkg
+*.shp
+*.dbf
+*.shx
+*.prj
+data/
+
+.DS_Store
