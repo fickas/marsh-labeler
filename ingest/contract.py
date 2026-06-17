@@ -35,6 +35,12 @@ class FlightInputs:
     review_gpkg: str          # build_abstain_review_polygons() output
     ortho_path: str           # multiband ortho, for chip rendering
     superpixel_path: str      # uint32 superpixel-id raster
+    # study site this flight belongs to (e.g. "Wellfleet"). Created on first use;
+    # several flights can share one project (1cm + 4cm of the same marsh).
+    project: str | None = None
+    # which active-learning round this ingest represents. Each retrain bumps it;
+    # the queue serves the flight's highest ingested round. Default 1 = first pass.
+    round: int = 1
     abstain_path: str | None = None
     softmax_path: str | None = None   # optional; enables per-container model_probs
     gsd_cm: float | None = None

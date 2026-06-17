@@ -13,8 +13,11 @@ probabilities, scores serving priority, and inserts a `containers` row.
 Run:
     python -m ingest.ingest_flight --config flights/example.yaml
 
-Re-ingesting a flight: clear it first (labels cascade):
-    python -m ingest.ingest_flight --config flights/example.yaml --replace
+Rounds: each retrain is a new round. Set `round` in the config (or pass
+--round N). Ingesting a round replaces just that round's containers and points
+the flight's queue at it; superpixels that already carry a gold verdict are
+skipped (settled, never re-asked). Labels/verdicts key on the superpixel, so
+none of this disturbs answers already collected.
 
 Heavy geo deps (rasterio/geopandas/matplotlib) are imported lazily so the rest
 of the package stays importable without them.
@@ -29,7 +32,7 @@ import yaml
 
 from app.constants import DEFAULT_SCHEME, pair_priority
 from app.db import SessionLocal
-from app.models import Container, Flight
+from app.models import Container, Flight, Project, ResolvedLabel
 from app.storage import put_chip
 
 from .contract import REQUIRED_REVIEW_COLUMNS, FlightInputs, ViewSpec
@@ -86,11 +89,13 @@ def _resolve_scheme(classes: dict | None) -> dict:
     }
 
 
-def ingest(config_path: str, replace: bool = False) -> None:
+def ingest(config_path: str, round_override: int | None = None) -> None:
     import geopandas as gpd
     import rasterio
 
     inp = load_inputs(config_path)
+    if round_override is not None:
+        inp.round = round_override
     gdf = gpd.read_file(inp.review_gpkg)
     missing = [
         c for c in REQUIRED_REVIEW_COLUMNS if c != "geometry" and c not in gdf.columns
@@ -101,21 +106,51 @@ def ingest(config_path: str, replace: bool = False) -> None:
     session = SessionLocal()
     try:
         scheme = _resolve_scheme(inp.classes)
+        rnd = int(inp.round)
+
+        project = None
+        if inp.project:
+            project = session.query(Project).filter_by(name=inp.project).one_or_none()
+            if project is None:
+                project = Project(name=inp.project)
+                session.add(project)
+                session.flush()
+
         flight = session.query(Flight).filter_by(name=inp.name).one_or_none()
-        if flight is not None and replace:
-            session.query(Container).filter_by(flight_id=flight.id).delete()
         if flight is None:
             flight = Flight(
                 name=inp.name,
+                project_id=project.id if project else None,
                 crs=inp.crs,
                 gsd_cm=inp.gsd_cm,
                 ortho_path=inp.ortho_path,
                 superpixel_path=inp.superpixel_path,
                 abstain_path=inp.abstain_path,
                 class_scheme=scheme,
+                active_round=rnd,
             )
             session.add(flight)
             session.flush()
+        else:
+            if project is not None:
+                flight.project_id = project.id
+            # Re-ingesting this round (or advancing to a new one): clear just this
+            # round's containers and serve it. Labels/verdicts are keyed to the
+            # superpixel, so this never touches answers.
+            session.query(Container).filter_by(flight_id=flight.id, round=rnd).delete()
+            flight.active_round = rnd
+
+        # Superpixels already settled by a gold verdict are done -- don't bother
+        # rendering chips or queuing questions for them in this (or any) round.
+        settled = {
+            sp
+            for (sp,) in session.query(ResolvedLabel.superpixel_id)
+            .filter(
+                ResolvedLabel.flight_id == flight.id,
+                ResolvedLabel.class_id.isnot(None),
+            )
+            .all()
+        }
 
         # serve by whatever THIS flight calls damage (existing flight wins).
         damage = set((flight.class_scheme or scheme).get("damage", []))
@@ -124,8 +159,13 @@ def ingest(config_path: str, replace: bool = False) -> None:
             pad = inp.context_pad_px * abs(o.res[0])
 
         srid = _srid(inp.crs)
+        n_ingested = 0
+        n_skipped = 0
         for _, row in gdf.iterrows():
             sp_id = int(row["superpixel_id"])
+            if sp_id in settled:
+                n_skipped += 1
+                continue
             abstain_frac = float(row.get("abstain_frac") or 0.0)
             is_diffuse = bool(row.get("is_diffuse"))
             class_a = None if is_diffuse else _i(row.get("class_a"))
@@ -138,7 +178,7 @@ def ingest(config_path: str, replace: bool = False) -> None:
                     inp.ortho_path,
                     (minx - pad, miny - pad, maxx + pad, maxy + pad),
                     tmp,
-                    f"{inp.name}/sp_{sp_id}",
+                    f"{inp.name}/r{rnd}/sp_{sp_id}",
                     put_chip,
                 )
 
@@ -151,6 +191,7 @@ def ingest(config_path: str, replace: bool = False) -> None:
             session.add(
                 Container(
                     flight_id=flight.id,
+                    round=rnd,
                     superpixel_id=sp_id,
                     geom=f"SRID={srid};{row.geometry.wkt}",
                     n_pixels=_i(row.get("n_pixels")) or 0,
@@ -167,8 +208,13 @@ def ingest(config_path: str, replace: bool = False) -> None:
                     replication_target=inp.replication_target,
                 )
             )
+            n_ingested += 1
         session.commit()
-        print(f"Ingested {len(gdf)} containers for flight '{inp.name}'.")
+        where = f"project '{inp.project}' / " if inp.project else ""
+        print(
+            f"Ingested {n_ingested} containers for {where}flight '{inp.name}' "
+            f"round {rnd} (skipped {n_skipped} already-settled superpixels)."
+        )
     finally:
         session.close()
 
@@ -177,7 +223,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True, help="YAML flight config (see flights/)")
     ap.add_argument(
-        "--replace", action="store_true", help="clear this flight's containers first"
+        "--round",
+        type=int,
+        default=None,
+        help="active-learning round number (overrides the config's `round`). "
+        "Re-running a round replaces just that round's containers.",
     )
     args = ap.parse_args()
-    ingest(args.config, replace=args.replace)
+    ingest(args.config, round_override=args.round)

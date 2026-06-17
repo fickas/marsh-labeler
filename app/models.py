@@ -1,11 +1,24 @@
 """SQLAlchemy 2.0 models for the superpixel labeling app.
 
-Five tables:
-  flights          - one drone flight / dataset
-  containers        - one superpixel review item (the unit of work)
+Hierarchy (top to bottom):
+  projects          - one salt marsh / study site (e.g. "Wellfleet")
+  flights           - one drone flight under a project; owns its own class scheme
+                      and is the unit a labeler works on (a "task")
+  containers        - one superpixel review item FOR ONE ROUND (the question).
+                      EPHEMERAL: regenerated every retrain; safe to replace.
+
+Durable layer, keyed to the superpixel rather than to any round's container:
   users             - the labelers
-  labels            - raw per-(container, user) answers  (the audit trail)
-  resolved_labels   - one resolved/gold label per container (feeds retraining)
+  labels            - one labeler's answer about a superpixel (the audit trail),
+                      stamped with the round + contested pair it was given under
+  resolved_labels   - the gold verdict per (flight, superpixel). This is the
+                      training fact; it survives every retrain and, once set,
+                      retires that superpixel from all future rounds.
+
+The split is the point: a container is a disposable per-round QUESTION; a label/
+verdict is a durable ANSWER about a place on the ground. Retraining throws away
+the old round's containers and ingests new ones, and the answers persist because
+they never pointed at a container in the first place.
 
 Allowed-value sets are enforced with CHECK constraints over plain strings,
 deliberately avoiding native PG enum types (which are painful under Alembic).
@@ -49,10 +62,32 @@ class Base(DeclarativeBase):
     pass
 
 
+class Project(Base):
+    """A study site that groups one or more flights. Simple project = one flight
+    (e.g. the 1cm); complex project = two flights (1cm + 4cm) of the same marsh,
+    flown about the same day, each with its own scheme and its own queue."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String, unique=True, index=True)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    flights: Mapped[list["Flight"]] = relationship(
+        back_populates="project", order_by="Flight.gsd_cm"
+    )
+
+
 class Flight(Base):
     __tablename__ = "flights"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     crs: Mapped[str] = mapped_column(String, default=f"EPSG:{SRID}")
     gsd_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -60,13 +95,20 @@ class Flight(Base):
     superpixel_path: Mapped[str | None] = mapped_column(String, nullable=True)
     abstain_path: Mapped[str | None] = mapped_column(String, nullable=True)
     # the class scheme for THIS flight: {"names": {id: name}, "damage": [ids],
-    # "ignore_index": int}. Class meanings/counts live here, not in code.
+    # "ignore_index": int}. Class meanings/counts live here, not in code. Stays
+    # per-flight on purpose: a project's 1cm and 4cm flights can use different
+    # models with different schemes.
     class_scheme = mapped_column(JSONB, nullable=True)
+    # which round's containers the labeler queue currently serves. Bumped by each
+    # retrain's ingest; old rounds' containers may linger for history but are not
+    # served.
+    active_round: Mapped[int] = mapped_column(Integer, default=1)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 
+    project: Mapped["Project | None"] = relationship(back_populates="flights")
     containers: Mapped[list["Container"]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
     )
@@ -76,15 +118,26 @@ class Flight(Base):
 
 
 class Container(Base):
+    """One superpixel review item for ONE round -- the question put to a labeler.
+
+    Ephemeral: a retrain produces a fresh abstain set, which is ingested as a new
+    round of containers; the previous round's containers can be dropped. Nothing
+    durable hangs off a container (labels/verdicts key on the superpixel), so
+    replacing a round never touches answers.
+    """
+
     __tablename__ = "containers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     flight_id: Mapped[int] = mapped_column(
         ForeignKey("flights.id", ondelete="CASCADE"), index=True
     )
+    # which round (model generation) raised this question.
+    round: Mapped[int] = mapped_column(Integer, default=1, index=True)
     # the superpixel's DN within this flight's superpixel-id raster; this is the
-    # key that lets resolved labels rasterize back onto the training mask.
-    superpixel_id: Mapped[int] = mapped_column(Integer)
+    # key that lets verdicts rasterize back onto the training mask, and the key
+    # that ties a round's question to the durable answer.
+    superpixel_id: Mapped[int] = mapped_column(Integer, index=True)
     geom = mapped_column(Geometry("POLYGON", srid=SRID), nullable=True)
 
     n_pixels: Mapped[int] = mapped_column(Integer, default=0)
@@ -100,7 +153,6 @@ class Container(Base):
     is_diffuse: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # mean per-class softmax over the container's pixels: {class_id: prob}.
-    # powers the "model says 48% edge / 45% platform" assist.
     model_probs = mapped_column(JSONB, nullable=True)
     # rendered chip views: {"truecolor": url, "cir": url, "geomorphic": url, ...}
     chip_keys = mapped_column(JSONB, nullable=True)
@@ -115,15 +167,11 @@ class Container(Base):
     )
 
     flight: Mapped["Flight"] = relationship(back_populates="containers")
-    labels: Mapped[list["Label"]] = relationship(
-        back_populates="container", cascade="all, delete-orphan"
-    )
-    resolved: Mapped["ResolvedLabel | None"] = relationship(
-        back_populates="container", uselist=False, cascade="all, delete-orphan"
-    )
 
     __table_args__ = (
-        UniqueConstraint("flight_id", "superpixel_id", name="uq_container_flight_sp"),
+        UniqueConstraint(
+            "flight_id", "round", "superpixel_id", name="uq_container_flight_round_sp"
+        ),
         CheckConstraint(f"status in {_in_sql(STATUSES)}", name="ck_container_status"),
     )
 
@@ -145,20 +193,34 @@ class User(Base):
 
 
 class Label(Base):
-    """One labeler's answer for one container. Unique per (container, user), so a
-    person gives a single (updatable) answer and we can compare across people."""
+    """One labeler's answer about one superpixel -- the durable audit trail.
+
+    Keyed to (flight, superpixel, user), NOT to a container: the answer is a fact
+    about a place on the ground and must outlive the round-specific container that
+    happened to ask the question. The round and contested pair the answer was
+    given under are stamped here (denormalized) so the trail stays interpretable
+    even after that round's containers are gone.
+    """
 
     __tablename__ = "labels"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    container_id: Mapped[int] = mapped_column(
-        ForeignKey("containers.id", ondelete="CASCADE"), index=True
+    flight_id: Mapped[int] = mapped_column(
+        ForeignKey("flights.id", ondelete="CASCADE"), index=True
     )
+    superpixel_id: Mapped[int] = mapped_column(Integer, index=True)
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     action: Mapped[str] = mapped_column(String, default="label")
     class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # null: skip/split
+
+    # audit context: the round + contested pair this answer was given under.
+    round: Mapped[int] = mapped_column(Integer, default=1)
+    pair_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    class_a: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    class_b: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     confidence: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)  # optional 1-5
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
@@ -168,24 +230,32 @@ class Label(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    container: Mapped["Container"] = relationship(back_populates="labels")
     user: Mapped["User"] = relationship(back_populates="labels")
 
     __table_args__ = (
-        UniqueConstraint("container_id", "user_id", name="uq_label_container_user"),
+        UniqueConstraint(
+            "flight_id", "superpixel_id", "user_id", name="uq_label_flight_sp_user"
+        ),
         CheckConstraint(f"action in {_in_sql(ACTIONS)}", name="ck_label_action"),
     )
 
 
 class ResolvedLabel(Base):
-    """The gold label per container (majority / single / adjudicated). This is the
-    layer that rasterizes back to a training mask; raw `labels` stay as the trail."""
+    """The gold verdict per (flight, superpixel) -- the durable training fact.
+
+    This is the layer that rasterizes back onto the superpixel raster to build a
+    training mask, and the layer the queue checks to retire settled superpixels.
+    Once class_id is set, that superpixel is done: it will not be re-asked in any
+    future round. A "skip" never produces a verdict, so genuinely-skipped
+    superpixels can resurface in a later round.
+    """
 
     __tablename__ = "resolved_labels"
 
-    container_id: Mapped[int] = mapped_column(
-        ForeignKey("containers.id", ondelete="CASCADE"), primary_key=True
+    flight_id: Mapped[int] = mapped_column(
+        ForeignKey("flights.id", ondelete="CASCADE"), primary_key=True
     )
+    superpixel_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # null = unresolved
     method: Mapped[str] = mapped_column(String, default="single")
     resolved_by: Mapped[int | None] = mapped_column(
@@ -195,8 +265,6 @@ class ResolvedLabel(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-
-    container: Mapped["Container"] = relationship(back_populates="resolved")
 
     __table_args__ = (
         CheckConstraint(f"method in {_in_sql(RESOLVE_METHODS)}", name="ck_resolved_method"),

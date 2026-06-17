@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marsh Labeler</title>
+<style>
+  :root {
+    --bg: #0e1416; --panel: #161d22; --panel2: #1d262c; --line: #28333a;
+    --ink: #e8eef0; --muted: #8aa0a8;
+    --a: #46b7a6; --b: #e0913f;        /* the two contested sides */
+    --a-dim: #1c3b39; --b-dim: #3b2f1c;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+         -webkit-font-smoothing: antialiased; }
+  header { display: flex; align-items: baseline; gap: 1.25rem; padding: .7rem 1.1rem;
+           border-bottom: 1px solid var(--line); }
+  header .brand { font-weight: 650; letter-spacing: -.01em; }
+  header .flight { color: var(--muted); font-family: var(--mono); font-size: .85rem; }
+  header .spacer { flex: 1; }
+  header .who { color: var(--muted); font-size: .85rem; }
+  header .who b { color: var(--ink); font-weight: 600; }
+  header .progress { font-family: var(--mono); font-size: .85rem; color: var(--muted); }
+  header button.link { background: none; border: none; color: var(--muted);
+           text-decoration: underline; cursor: pointer; font-size: .8rem; padding: 0; }
+
+  main { max-width: 1140px; margin: 0 auto; padding: 1.1rem; }
+  .ask { text-align: center; margin: .4rem 0 1rem; color: var(--muted); font-size: .95rem; }
+  .ask b.l { color: var(--a); } .ask b.r { color: var(--b); }
+
+  .triptych { display: grid; grid-template-columns: 1fr 1.5fr 1fr; gap: 1rem; align-items: start; }
+  .gallery h3 { margin: 0 0 .5rem; font-size: .8rem; text-transform: uppercase;
+           letter-spacing: .08em; font-weight: 600; }
+  .gallery.l h3 { color: var(--a); } .gallery.r h3 { color: var(--b); }
+  .gallery .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; }
+  .gallery img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px;
+           display: block; background: var(--panel2); }
+  .gallery.l img { border: 1px solid var(--a-dim); }
+  .gallery.r img { border: 1px solid var(--b-dim); }
+  .gallery .none { color: var(--muted); font-size: .8rem; }
+
+  .center { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: .8rem; }
+  .center .chip { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px;
+            background: var(--panel2); display: block; }
+  .views { display: flex; gap: .35rem; justify-content: center; margin: .6rem 0 .2rem; }
+  .views button { background: var(--panel2); color: var(--muted); border: 1px solid var(--line);
+            border-radius: 999px; padding: .2rem .7rem; font-size: .78rem; cursor: pointer; }
+  .views button[aria-pressed="true"] { color: var(--ink); border-color: var(--muted); }
+  .meta { display: flex; justify-content: space-between; gap: 1rem; margin-top: .7rem;
+            font-family: var(--mono); font-size: .76rem; color: var(--muted); }
+  .probs { margin-top: .6rem; }
+  .probs .row { display: flex; align-items: center; gap: .5rem; margin: .2rem 0; font-size: .8rem; }
+  .probs .name { width: 6.5rem; text-align: right; color: var(--muted); }
+  .probs .bar { flex: 1; height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
+  .probs .bar span { display: block; height: 100%; }
+  .probs .val { width: 3rem; font-family: var(--mono); }
+
+  .actions { margin-top: 1.1rem; }
+  .sides { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+  .sides button { padding: .9rem; border-radius: 10px; border: 1px solid; cursor: pointer;
+            font-size: 1rem; font-weight: 600; color: var(--ink); background: transparent; }
+  .sides .a { border-color: var(--a); } .sides .a:hover { background: var(--a-dim); }
+  .sides .b { border-color: var(--b); } .sides .b:hover { background: var(--b-dim); }
+  .sides .key { font-family: var(--mono); color: var(--muted); font-weight: 400; font-size: .8rem; }
+
+  .palette { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; margin-top: .8rem; }
+  .palette button, .escape button { background: var(--panel2); color: var(--ink);
+            border: 1px solid var(--line); border-radius: 7px; padding: .4rem .7rem;
+            font-size: .82rem; cursor: pointer; }
+  .palette button:hover, .escape button:hover { border-color: var(--muted); }
+  .palette .lbl { color: var(--muted); font-size: .76rem; align-self: center; margin-right: .2rem; }
+  .escape { display: flex; gap: .4rem; justify-content: center; margin-top: .6rem; }
+  .escape button .key { color: var(--muted); font-family: var(--mono); font-size: .72rem; }
+
+  .empty, .gate { text-align: center; padding: 4rem 1rem; color: var(--muted); }
+  .gate input { background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+            padding: .5rem .7rem; border-radius: 7px; font-size: 1rem; }
+  .gate button { margin-left: .5rem; padding: .5rem .9rem; border-radius: 7px;
+            border: 1px solid var(--a); background: transparent; color: var(--ink); cursor: pointer; }
+  button:focus-visible { outline: 2px solid var(--a); outline-offset: 2px; }
+  @media (max-width: 760px) { .triptych { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Marsh Labeler</span>
+  <span class="flight" id="flightName">—</span>
+  <span class="spacer"></span>
+  <span class="progress" id="progress"></span>
+  <span class="who" id="who"></span>
+  <button class="link" id="changeUser" hidden>change</button>
+</header>
+
+<main id="main"></main>
+
+<script>
+const API = "";
+let state = { flightId: null, scheme: null, view: "truecolor", current: null,
+              user: localStorage.getItem("ml_user") || "" };
+
+const $ = (s, r=document) => r.querySelector(s);
+function el(tag, attrs={}, kids=[]) {
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) e.setAttribute(k, v);
+  }
+  for (const c of [].concat(kids)) e.append(c);
+  return e;
+}
+
+async function api(path, opts) {
+  const r = await fetch(API + path, opts);
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+
+function gate() {
+  $("#main").replaceChildren(el("div", {class:"gate"}, [
+    el("p", {html: "Enter your email to start labeling. Your answers are recorded under it."}),
+    el("input", {id:"email", type:"email", placeholder:"you@uoregon.edu",
+                 value: state.user, onkeydown:(e)=>{ if(e.key==="Enter") setUser(); }}),
+    el("button", {onclick:setUser}, "Start"),
+  ]));
+  $("#email").focus();
+}
+function setUser() {
+  const v = $("#email").value.trim();
+  if (!v) return;
+  state.user = v; localStorage.setItem("ml_user", v);
+  start();
+}
+
+async function start() {
+  $("#who").textContent = "labeling as ";
+  $("#who").append(el("b", {}, state.user));
+  $("#changeUser").hidden = false;
+  const flights = await api("/api/flights");
+  if (!flights.length) { $("#main").replaceChildren(el("div",{class:"empty"},
+      "No flights yet. Seed one with python seed.py, then reload.")); return; }
+  const f = flights[0];
+  state.flightId = f.id; state.scheme = f.class_scheme;
+  $("#flightName").textContent = f.name;
+  loadNext();
+}
+
+async function loadNext() {
+  const data = await api(`/api/flights/${state.flightId}/next?user=${encodeURIComponent(state.user)}`);
+  $("#progress").textContent = `${data.progress.labeled} / ${data.progress.total}`;
+  if (data.done) {
+    $("#main").replaceChildren(el("div",{class:"empty"},
+      "Queue clear. Every container in this flight has been labeled by you. Nice work."));
+    return;
+  }
+  state.current = data;
+  state.scheme = data.scheme;
+  render();
+}
+
+function chipUrl(keys) { return keys ? (keys[state.view] || Object.values(keys)[0]) : ""; }
+function names() { return (state.scheme && state.scheme.names) || {}; }
+
+function gallery(side, classId) {
+  const list = (state.current.exemplars[String(classId)]) || [];
+  const grid = el("div", {class:"grid"});
+  if (!list.length) grid.append(el("span",{class:"none"},"no exemplars"));
+  for (const ex of list.slice(0,4)) grid.append(el("img",{src:chipUrl(ex.chip_keys), alt:""}));
+  return el("div", {class:`gallery ${side}`}, [
+    el("h3", {}, names()[classId] || `class ${classId}`),
+    grid,
+  ]);
+}
+
+function probRow(classId) {
+  const c = state.current.container;
+  const p = (c.model_probs && (c.model_probs[String(classId)] ?? c.model_probs[classId])) || 0;
+  const color = classId === c.class_a ? "var(--a)" : (classId === c.class_b ? "var(--b)" : "var(--muted)");
+  return el("div",{class:"row"},[
+    el("span",{class:"name"}, names()[classId] || `class ${classId}`),
+    el("div",{class:"bar"}, el("span",{style:`width:${Math.round(p*100)}%;background:${color}`})),
+    el("span",{class:"val"}, p ? p.toFixed(2) : "—"),
+  ]);
+}
+
+function render() {
+  const c = state.current.container;
+  const aName = c.class_a_name || `class ${c.class_a}`;
+  const bName = c.class_b_name || `class ${c.class_b}`;
+
+  const views = el("div",{class:"views"},
+    Object.keys(c.chip_keys||{}).map(v =>
+      el("button",{ "aria-pressed": String(v===state.view),
+        onclick:()=>{ state.view=v; render(); } }, v)));
+
+  const center = el("div",{class:"center"},[
+    el("img",{class:"chip", src:chipUrl(c.chip_keys), alt:"container chip"}),
+    views,
+    el("div",{class:"probs"},[probRow(c.class_a), probRow(c.class_b)]),
+    el("div",{class:"meta"},[
+      el("span",{}, `sp ${c.superpixel_id}`),
+      el("span",{}, `abstain ${(c.abstain_frac*100).toFixed(0)}%`),
+      el("span",{}, `purity ${c.pair_purity!=null ? c.pair_purity.toFixed(2) : "—"}`),
+    ]),
+  ]);
+
+  const sides = el("div",{class:"sides"},[
+    el("button",{class:"a", onclick:()=>answer("label", c.class_a)},
+      [ el("div",{},aName), el("div",{class:"key"},"press 1") ]),
+    el("button",{class:"b", onclick:()=>answer("label", c.class_b)},
+      [ el("div",{},bName), el("div",{class:"key"},"press 2") ]),
+  ]);
+
+  const palette = el("div",{class:"palette"},
+    [ el("span",{class:"lbl"},"or a different class:") ].concat(
+      Object.entries(names()).map(([id,nm]) =>
+        el("button",{onclick:()=>answer("label", Number(id))}, nm))));
+
+  const escape = el("div",{class:"escape"},[
+    el("button",{onclick:()=>answer("skip")}, [document.createTextNode("Skip "), el("span",{class:"key"},"s")]),
+    el("button",{onclick:()=>answer("other")}, [document.createTextNode("None / background "), el("span",{class:"key"},"o")]),
+    el("button",{onclick:()=>answer("split")}, [document.createTextNode("Needs split "), el("span",{class:"key"},"x")]),
+  ]);
+
+  $("#main").replaceChildren(
+    el("p",{class:"ask", html:`Model can't decide. Is this <b class="l">${aName}</b> or <b class="r">${bName}</b>?`}),
+    el("div",{class:"triptych"},[ gallery("l", c.class_a), center, gallery("r", c.class_b) ]),
+    el("div",{class:"actions"},[ sides, palette, escape ]),
+  );
+}
+
+async function answer(action, classId=null) {
+  const c = state.current.container;
+  await api("/api/labels", { method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ container_id:c.id, user:state.user, action, class_id:classId }) });
+  loadNext();
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!state.current || e.target.tagName === "INPUT") return;
+  const c = state.current.container;
+  if (e.key === "1") answer("label", c.class_a);
+  else if (e.key === "2") answer("label", c.class_b);
+  else if (e.key === "s") answer("skip");
+  else if (e.key === "o") answer("other");
+  else if (e.key === "x") answer("split");
+});
+
+$("#changeUser").addEventListener("click", () => { localStorage.removeItem("ml_user"); state.user=""; gate(); });
+
+state.user ? start() : gate();
+</script>
+</body>
+</html>
