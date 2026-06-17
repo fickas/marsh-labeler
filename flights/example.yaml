@@ -26,6 +26,16 @@ classes:
   damage: [3, 4, 5]        # which classes count toward the AREA metric
   ignore_index: 255
 
+# Reference gallery, built by ingest_exemplars.py from your class-labeled
+# polygons (rendered with the same views as the containers).
+labeled_polygons: /data/30jun23/labels.gpkg
+label_class_field: class
+examples_per_class: 5
+exemplar_crop_px: 128       # interior window side in px; tune to match container chip zoom
+# exemplar_curated:         # optional: hand-pick polygon indices per class
+#   3: [12, 47]
+#   4: [3, 88]
+
 views:
   - name: truecolor
     bands: [3, 2, 1]      # MicaSense band order is B,G,R,RE,NIR -> R=3,G=2,B=1

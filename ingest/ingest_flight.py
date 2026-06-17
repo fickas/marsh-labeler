@@ -33,6 +33,7 @@ from app.models import Container, Flight
 from app.storage import put_chip
 
 from .contract import REQUIRED_REVIEW_COLUMNS, FlightInputs, ViewSpec
+from .render import render_views
 
 
 def load_inputs(config_path: str) -> FlightInputs:
@@ -40,60 +41,6 @@ def load_inputs(config_path: str) -> FlightInputs:
         raw = yaml.safe_load(f)
     raw["views"] = [ViewSpec(**v) for v in raw.get("views", [])]
     return FlightInputs(**raw)
-
-
-def _percentile_stretch(arr, lo: float = 2, hi: float = 98):
-    """Stretch a band to [0, 1] on its 2nd/98th percentiles (drops outliers)."""
-    import numpy as np
-
-    finite = arr[np.isfinite(arr)]
-    if finite.size == 0:
-        return arr
-    p_lo, p_hi = np.percentile(finite, [lo, hi])
-    if p_hi <= p_lo:
-        p_hi = p_lo + 1e-6
-    return np.clip((arr - p_lo) / (p_hi - p_lo), 0.0, 1.0)
-
-
-def _render_views(inp: FlightInputs, bounds, tmpdir: str, key_prefix: str) -> dict:
-    """Render every ViewSpec as a PNG over `bounds` + context pad; return
-    {view_name: public_url}."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import rasterio
-    from rasterio.windows import from_bounds
-
-    minx, miny, maxx, maxy = bounds
-    urls: dict[str, str] = {}
-    for view in inp.views:
-        src_path = view.source_path or inp.ortho_path
-        with rasterio.open(src_path) as src:
-            pad = inp.context_pad_px * src.res[0]  # context in map units
-            window = from_bounds(
-                minx - pad, miny - pad, maxx + pad, maxy + pad, src.transform
-            )
-            if view.bands:  # RGB composite
-                channels = [
-                    _percentile_stretch(src.read(b, window=window).astype("float32"))
-                    for b in view.bands
-                ]
-                img = np.dstack(channels)
-                cmap = None
-            else:  # single-band derived view
-                img = _percentile_stretch(src.read(1, window=window).astype("float32"))
-                cmap = view.cmap
-
-        fig, ax = plt.subplots(figsize=(3, 3), dpi=100)
-        ax.imshow(img, cmap=cmap)
-        ax.axis("off")
-        local = os.path.join(tmpdir, f"{view.name}.png")
-        fig.savefig(local, bbox_inches="tight", pad_inches=0)
-        plt.close(fig)
-        urls[view.name] = put_chip(local, f"{key_prefix}/{view.name}.png")
-    return urls
 
 
 def _mean_probs(softmax_path: str, superpixel_path: str, superpixel_id: int):
@@ -141,6 +88,7 @@ def _resolve_scheme(classes: dict | None) -> dict:
 
 def ingest(config_path: str, replace: bool = False) -> None:
     import geopandas as gpd
+    import rasterio
 
     inp = load_inputs(config_path)
     gdf = gpd.read_file(inp.review_gpkg)
@@ -171,6 +119,10 @@ def ingest(config_path: str, replace: bool = False) -> None:
 
         # serve by whatever THIS flight calls damage (existing flight wins).
         damage = set((flight.class_scheme or scheme).get("damage", []))
+        # context padding in map units, from the ortho's pixel size (once).
+        with rasterio.open(inp.ortho_path) as o:
+            pad = inp.context_pad_px * abs(o.res[0])
+
         srid = _srid(inp.crs)
         for _, row in gdf.iterrows():
             sp_id = int(row["superpixel_id"])
@@ -179,9 +131,15 @@ def ingest(config_path: str, replace: bool = False) -> None:
             class_a = None if is_diffuse else _i(row.get("class_a"))
             class_b = None if is_diffuse else _i(row.get("class_b"))
 
+            minx, miny, maxx, maxy = row.geometry.bounds
             with tempfile.TemporaryDirectory() as tmp:
-                chip_keys = _render_views(
-                    inp, row.geometry.bounds, tmp, key_prefix=f"{inp.name}/sp_{sp_id}"
+                chip_keys = render_views(
+                    inp.views,
+                    inp.ortho_path,
+                    (minx - pad, miny - pad, maxx + pad, maxy + pad),
+                    tmp,
+                    f"{inp.name}/sp_{sp_id}",
+                    put_chip,
                 )
 
             probs = (

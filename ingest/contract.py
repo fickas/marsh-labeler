@@ -45,6 +45,14 @@ class FlightInputs:
     context_pad_px: int = 64  # surrounding context rendered around each container
     replication_target: int = 1
 
+    # Reference exemplars (ingest_exemplars.py). Built from a class-labeled
+    # polygon layer, rendered with the same views as containers.
+    labeled_polygons: str | None = None   # GeoPackage/shapefile with a class field
+    label_class_field: str = "class"      # the integer class column in it
+    examples_per_class: int = 5
+    exemplar_crop_px: int = 128            # interior window side; tune to container chip zoom
+    exemplar_curated: dict | None = None   # optional {class_id: [polygon_index, ...]}
+
 
 # Columns the review GeoPackage must carry (besides `geometry`).
 REQUIRED_REVIEW_COLUMNS = (

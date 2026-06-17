@@ -22,7 +22,9 @@ marsh-labeler/
 │   └── main.py          # FastAPI stub (health only for now)
 ├── ingest/
 │   ├── contract.py      # dataclasses: exactly what ingestion reads
-│   └── ingest_flight.py # pipeline outputs -> chips + Postgres rows
+│   ├── render.py        # shared chip renderer (containers + exemplars)
+│   ├── ingest_flight.py # review queue -> chips + container rows
+│   └── ingest_exemplars.py # labeled polygons -> per-class reference chips
 ├── alembic/             # migrations (0001 = initial schema)
 ├── flights/example.yaml # one flight's ingestion config
 ├── docker-compose.yml   # local Postgres + PostGIS
@@ -46,6 +48,10 @@ marsh-labeler/
 - **resolved_labels** — the single gold label per container (single / majority /
   adjudicated). **This is what rasterizes back to the training mask** — via
   `superpixel_id`, not geometry.
+- **exemplars** — reference chips per class, rendered from your labeled polygons
+  with the same views as the containers. The UI shows these as a calibration
+  gallery (surface the contested pair's two classes first). Built separately by
+  `ingest_exemplars.py`, so you can re-curate examples without re-ingesting.
 
 `priority` is set at ingest by `app.constants.pair_priority`: ties that cross
 the damage boundary (exactly one of the two classes is a crab class) are served
@@ -63,6 +69,9 @@ uvicorn app.main:app --reload               # http://localhost:8000/health
 
 # ingest a flight (edit flights/example.yaml to point at your pipeline outputs)
 python -m ingest.ingest_flight --config flights/example.yaml
+
+# build the per-class reference gallery from your labeled polygons
+python -m ingest.ingest_exemplars --config flights/example.yaml
 ```
 
 Re-ingest a flight (clears its containers; labels cascade):

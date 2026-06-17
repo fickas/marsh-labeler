@@ -70,6 +70,9 @@ class Flight(Base):
     containers: Mapped[list["Container"]] = relationship(
         back_populates="flight", cascade="all, delete-orphan"
     )
+    exemplars: Mapped[list["Exemplar"]] = relationship(
+        back_populates="flight", cascade="all, delete-orphan"
+    )
 
 
 class Container(Base):
@@ -198,3 +201,30 @@ class ResolvedLabel(Base):
     __table_args__ = (
         CheckConstraint(f"method in {_in_sql(RESOLVE_METHODS)}", name="ck_resolved_method"),
     )
+
+
+class Exemplar(Base):
+    """A reference chip for one class, rendered from a labeled polygon and shown
+    to labelers as a calibration gallery ("this is what crab_edge looks like").
+
+    Tied to a flight and rendered with that flight's view specs, so the gallery
+    matches the chips the labeler is judging. class_id is interpreted through the
+    flight's class_scheme like every other class id -- nothing fixed here.
+    """
+
+    __tablename__ = "exemplars"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    flight_id: Mapped[int] = mapped_column(
+        ForeignKey("flights.id", ondelete="CASCADE"), index=True
+    )
+    class_id: Mapped[int] = mapped_column(Integer, index=True)
+    source_fid: Mapped[int | None] = mapped_column(Integer, nullable=True)  # labeled polygon
+    chip_keys = mapped_column(JSONB, nullable=True)   # {view: url}, same views as containers
+    geom = mapped_column(Geometry("POLYGON", srid=SRID), nullable=True)  # the sampled window
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    flight: Mapped["Flight"] = relationship(back_populates="exemplars")
