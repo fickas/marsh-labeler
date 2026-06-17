@@ -1,7 +1,8 @@
-"""FastAPI entry point: labeling API + the single-page labeling UI.
+"""FastAPI entry point: labeling API + the static pages.
 
-Serves the API from app.api, the rendered chips (when using local storage),
-and the labeling page at /.
+Serves the API from app.api, the rendered chips (when using local storage), and
+three pages: the tasks landing (/), the labeler (/label?flight=ID), and progress
+(/progress[?flight=ID|?project=ID]).
 """
 from __future__ import annotations
 
@@ -20,6 +21,10 @@ app.include_router(router)
 _WEB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
 
 
+def _page(name: str) -> FileResponse:
+    return FileResponse(os.path.join(_WEB, name))
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -32,6 +37,21 @@ if settings.storage_backend == "local":
     app.mount("/chips", StaticFiles(directory=settings.storage_local_dir), name="chips")
 
 
+@app.get("/style.css")
+def style() -> FileResponse:
+    return FileResponse(os.path.join(_WEB, "style.css"), media_type="text/css")
+
+
 @app.get("/")
-def index():
-    return FileResponse(os.path.join(_WEB, "index.html"))
+def landing() -> FileResponse:
+    return _page("projects.html")
+
+
+@app.get("/label")
+def labeler() -> FileResponse:
+    return _page("index.html")
+
+
+@app.get("/progress")
+def progress() -> FileResponse:
+    return _page("progress.html")

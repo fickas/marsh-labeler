@@ -26,6 +26,9 @@
   header .progress { font-family: var(--mono); font-size: .85rem; color: var(--muted); }
   header button.link { background: none; border: none; color: var(--muted);
            text-decoration: underline; cursor: pointer; font-size: .8rem; padding: 0; }
+  header a.brand { text-decoration: none; color: inherit; }
+  header a.navlink { color: var(--muted); text-decoration: none; font-size: .85rem; }
+  header a.navlink:hover { color: var(--ink); }
 
   main { max-width: 1140px; margin: 0 auto; padding: 1.1rem; }
   .ask { text-align: center; margin: .4rem 0 1rem; color: var(--muted); font-size: .95rem; }
@@ -87,7 +90,9 @@
 </head>
 <body>
 <header>
-  <span class="brand">Marsh Labeler</span>
+  <a class="brand" href="/">Marsh Labeler</a>
+  <a class="navlink" href="/">Tasks</a>
+  <a class="navlink" href="/progress">Progress</a>
   <span class="flight" id="flightName">—</span>
   <span class="spacer"></span>
   <span class="progress" id="progress"></span>
@@ -144,7 +149,8 @@ async function start() {
   const flights = await api("/api/flights");
   if (!flights.length) { $("#main").replaceChildren(el("div",{class:"empty"},
       "No flights yet. Seed one with python seed.py, then reload.")); return; }
-  const f = flights[0];
+  const want = new URLSearchParams(location.search).get("flight");
+  const f = (want && flights.find(x => String(x.id) === String(want))) || flights[0];
   state.flightId = f.id; state.scheme = f.class_scheme;
   $("#flightName").textContent = f.name;
   loadNext();
@@ -152,10 +158,13 @@ async function start() {
 
 async function loadNext() {
   const data = await api(`/api/flights/${state.flightId}/next?user=${encodeURIComponent(state.user)}`);
-  $("#progress").textContent = `${data.progress.labeled} / ${data.progress.total}`;
+  const p = data.progress;
+  $("#progress").textContent = `${p.labeled} labeled · ${p.settled} settled · round ${p.round}`;
   if (data.done) {
-    $("#main").replaceChildren(el("div",{class:"empty"},
-      "Queue clear. Every container in this flight has been labeled by you. Nice work."));
+    $("#main").replaceChildren(el("div",{class:"empty"},[
+      el("p",{}, "Queue clear for this round — nothing left here for you to label. Check back after the next retrain."),
+      el("p",{}, el("a",{href:"/", style:"color:var(--a)"}, "← Back to tasks")),
+    ]));
     return;
   }
   state.current = data;

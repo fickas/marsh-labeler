@@ -1,0 +1,117 @@
+/* Shared chrome for the non-labeler pages (landing, progress). Reuses the
+   labeler's field-instrument identity: dark panel stack, teal/amber as the two
+   contested sides, mono for data. The labeler page (index.html) keeps its own
+   inline styles; the tokens here are identical so the product reads as one. */
+:root {
+  --bg: #0e1416; --panel: #161d22; --panel2: #1d262c; --line: #28333a;
+  --ink: #e8eef0; --muted: #8aa0a8;
+  --a: #46b7a6; --b: #e0913f;          /* settled (teal) / open (amber) */
+  --a-dim: #1c3b39; --b-dim: #3b2f1c;
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans);
+       -webkit-font-smoothing: antialiased; }
+a { color: inherit; }
+
+/* masthead + nav ---------------------------------------------------------- */
+.masthead { display: flex; align-items: baseline; gap: 1.1rem; padding: .7rem 1.1rem;
+            border-bottom: 1px solid var(--line); }
+.masthead .brand { font-weight: 650; letter-spacing: -.01em; text-decoration: none; }
+.masthead .nav { display: flex; gap: .9rem; }
+.masthead .nav a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+.masthead .nav a:hover { color: var(--ink); }
+.masthead .nav a.on { color: var(--ink); }
+.masthead .spacer { flex: 1; }
+.masthead .who { color: var(--muted); font-size: .85rem; }
+.masthead .who b { color: var(--ink); font-weight: 600; }
+.masthead .link { background: none; border: none; color: var(--muted);
+            text-decoration: underline; cursor: pointer; font-size: .8rem; padding: 0; }
+
+main { max-width: 1040px; margin: 0 auto; padding: 1.4rem 1.1rem 3rem; }
+.tagline { color: var(--muted); font-size: .95rem; margin: 0 0 1.6rem; }
+.eyebrow { font-family: var(--mono); font-size: .72rem; letter-spacing: .12em;
+            text-transform: uppercase; color: var(--muted); }
+
+/* the abstain meter — the signature: settled (teal) fills against open (amber) */
+.meter { height: 8px; border-radius: 999px; overflow: hidden; display: flex;
+            background: var(--panel2); }
+.meter .settled { background: var(--a); }
+.meter .open { background: var(--b-dim); }
+.meter.empty { background: var(--panel2); }
+
+/* projects + task cards --------------------------------------------------- */
+.project { margin: 0 0 2rem; }
+.project-head { display: flex; align-items: baseline; gap: .8rem; margin: 0 0 .8rem;
+            padding-bottom: .5rem; border-bottom: 1px solid var(--line); }
+.project-head h2 { margin: 0; font-size: 1.05rem; letter-spacing: .01em; }
+.project-head a { font-size: .8rem; color: var(--muted); text-decoration: none; }
+.project-head a:hover { color: var(--ink); }
+
+.tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+            gap: .9rem; }
+.task { display: block; text-decoration: none; color: inherit; background: var(--panel);
+            border: 1px solid var(--line); border-radius: 10px; padding: .9rem 1rem;
+            transition: border-color .12s ease, transform .12s ease; }
+.task:hover { border-color: var(--a); transform: translateY(-1px); }
+.task-top { display: flex; justify-content: space-between; align-items: baseline; }
+.task-top .gsd { font-weight: 600; }
+.task-top .round { font-family: var(--mono); font-size: .74rem; color: var(--muted); }
+.task-name { font-family: var(--mono); font-size: .8rem; color: var(--muted);
+            margin: .15rem 0 .8rem; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; }
+.task .meter { margin: .2rem 0 .55rem; }
+.task-stat { font-size: .8rem; color: var(--muted); }
+.task-stat b { color: var(--a); font-weight: 600; }
+.task-go { margin-top: .7rem; font-size: .82rem; color: var(--a); }
+
+/* progress page ----------------------------------------------------------- */
+.crumbs { font-size: .82rem; color: var(--muted); margin: 0 0 1.1rem; }
+.crumbs a { color: var(--muted); text-decoration: none; }
+.crumbs a:hover { color: var(--ink); }
+.stat-title { display: flex; align-items: baseline; gap: .7rem; margin: 0 0 .2rem; }
+.stat-title h1 { margin: 0; font-size: 1.3rem; }
+.stat-title .gsd { font-family: var(--mono); color: var(--muted); font-size: .85rem; }
+
+.summary { display: flex; gap: 2rem; margin: 1.2rem 0 .4rem; }
+.summary .n { font-size: 1.9rem; font-weight: 650; line-height: 1; }
+.summary .n.teal { color: var(--a); }
+.summary .n.amber { color: var(--b); }
+.summary .lbl { font-size: .78rem; color: var(--muted); margin-top: .25rem; }
+.bigmeter { margin: 1rem 0 2.2rem; height: 12px; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 1.1rem 1.2rem; margin: 0 0 1.4rem; }
+.card h3 { margin: 0 0 .9rem; font-size: .82rem; text-transform: uppercase;
+            letter-spacing: .08em; font-weight: 600; color: var(--muted); }
+
+.vrow { display: flex; align-items: center; gap: .7rem; margin: .35rem 0; font-size: .86rem; }
+.vrow .name { width: 9rem; text-align: right; color: var(--ink); }
+.vrow .bar { flex: 1; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+.vrow .bar span { display: block; height: 100%; background: var(--a); }
+.vrow .val { width: 2.5rem; font-family: var(--mono); color: var(--muted); }
+
+table.labelers { width: 100%; border-collapse: collapse; font-size: .86rem; }
+table.labelers th, table.labelers td { text-align: right; padding: .4rem .3rem;
+            border-bottom: 1px solid var(--line); }
+table.labelers th { color: var(--muted); font-weight: 500; font-size: .76rem;
+            text-transform: uppercase; letter-spacing: .06em; }
+table.labelers td.who, table.labelers th.who { text-align: left; font-family: var(--mono);
+            font-size: .82rem; }
+table.labelers td.total { color: var(--ink); font-weight: 600; }
+
+.empty { text-align: center; padding: 3.5rem 1rem; color: var(--muted); line-height: 1.6; }
+.empty code { font-family: var(--mono); color: var(--ink); background: var(--panel2);
+            padding: .1rem .35rem; border-radius: 4px; }
+
+.gate { text-align: center; padding: 3rem 1rem; color: var(--muted); }
+.gate input { background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+            padding: .5rem .7rem; border-radius: 7px; font-size: 1rem; }
+.gate button { margin-left: .5rem; padding: .5rem .9rem; border-radius: 7px;
+            border: 1px solid var(--a); background: transparent; color: var(--ink); cursor: pointer; }
+
+a:focus-visible, button:focus-visible, .task:focus-visible {
+            outline: 2px solid var(--a); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .task { transition: none; } }
+@media (max-width: 620px) { .summary { gap: 1.3rem; } main { padding: 1.1rem .9rem 2.5rem; } }

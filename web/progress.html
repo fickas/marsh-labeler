@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marsh Labeler — Progress</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="/">Marsh Labeler</a>
+  <nav class="nav"><a href="/">Tasks</a><a href="/progress" class="on">Progress</a></nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+</header>
+
+<main id="main"></main>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+function el(tag, attrs={}, kids=[]) {
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) e.setAttribute(k, v);
+  }
+  for (const c of [].concat(kids)) e.append(c);
+  return e;
+}
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+function showWho() {
+  const u = localStorage.getItem("ml_user");
+  if (u) { $("#who").textContent = "labeling as "; $("#who").append(el("b",{},u)); }
+}
+const params = new URLSearchParams(location.search);
+
+// ---- chooser: when no ?flight=, list flights to drill into -----------------
+async function chooser() {
+  const projects = await api("/api/projects");
+  const wrap = el("div");
+  wrap.append(el("p",{class:"tagline"}, "Choose a task to see its progress."));
+  let any = false;
+  for (const p of projects) {
+    if (!p.flights.length) continue;
+    any = true;
+    wrap.append(el("section",{class:"project"},[
+      el("div",{class:"project-head"},[ el("h2",{}, p.name) ]),
+      el("div",{class:"tasks"}, p.flights.map(f =>
+        el("a",{class:"task", href:`/progress?flight=${f.id}`},[
+          el("div",{class:"task-top"},[
+            el("span",{class:"gsd"}, f.gsd_cm!=null?`${f.gsd_cm} cm`:"flight"),
+            el("span",{class:"round"}, `round ${f.active_round}`) ]),
+          el("div",{class:"task-name"}, f.name),
+          el("div",{class:"task-stat"},[ el("b",{}, String(f.progress.settled)),
+            document.createTextNode(` settled · ${f.progress.open_questions} open`) ]),
+        ]))),
+    ]));
+  }
+  if (!any) wrap.replaceChildren(el("div",{class:"empty"},
+    "No tasks yet. Seed or ingest a flight first."));
+  $("#main").replaceChildren(wrap);
+}
+
+// ---- one flight's stats ----------------------------------------------------
+function vrow(v, max) {
+  const pct = max ? Math.round((v.count / max) * 100) : 0;
+  return el("div",{class:"vrow"},[
+    el("span",{class:"name"}, v.name),
+    el("div",{class:"bar"}, el("span",{style:`width:${pct}%`})),
+    el("span",{class:"val"}, String(v.count)),
+  ]);
+}
+function labelerTable(rows) {
+  const head = el("tr",{},[
+    el("th",{class:"who"},"labeler"), el("th",{},"labeled"),
+    el("th",{},"skipped"), el("th",{},"split"), el("th",{},"none"), el("th",{},"total") ]);
+  const body = rows.map(r => el("tr",{},[
+    el("td",{class:"who"}, r.email),
+    el("td",{}, String(r.label)), el("td",{}, String(r.skip)),
+    el("td",{}, String(r.split)), el("td",{}, String(r.other)),
+    el("td",{class:"total"}, String(r.total)) ]));
+  return el("table",{class:"labelers"}, [head].concat(body));
+}
+
+async function flightView(flightId) {
+  let s;
+  try { s = await api(`/api/flights/${flightId}/stats`); }
+  catch (e) { $("#main").replaceChildren(el("div",{class:"empty"},
+    "That flight wasn't found.")); return; }
+
+  const denom = s.settled + s.open_questions;
+  const pct = denom ? Math.round((s.settled / denom) * 100) : 0;
+  const meter = denom
+    ? el("div",{class:"meter bigmeter"},[
+        el("span",{class:"settled", style:`width:${pct}%`}),
+        el("span",{class:"open", style:`width:${100-pct}%`}) ])
+    : el("div",{class:"meter bigmeter empty"});
+
+  const maxV = s.verdicts.reduce((m,v)=>Math.max(m,v.count), 0);
+  const verdictsCard = el("div",{class:"card"},[
+    el("h3",{}, "Verdicts by class"),
+    s.verdicts.length
+      ? el("div",{}, s.verdicts.map(v => vrow(v, maxV)))
+      : el("div",{class:"task-stat"}, "No settled verdicts yet."),
+  ]);
+
+  const labelersCard = el("div",{class:"card"},[
+    el("h3",{}, "Answers by labeler"),
+    s.labelers.length
+      ? labelerTable(s.labelers)
+      : el("div",{class:"task-stat"}, "No answers recorded yet."),
+  ]);
+
+  const crumbs = el("p",{class:"crumbs"},[
+    el("a",{href:"/"}, "Tasks"), document.createTextNode("  /  "),
+    el("a",{href: s.flight.project_id!=null ? `/progress?project=${s.flight.project_id}` : "/progress"},
+      "Progress"), document.createTextNode(`  /  ${s.flight.name}`) ]);
+
+  $("#main").replaceChildren(
+    crumbs,
+    el("div",{class:"stat-title"},[
+      el("h1",{}, s.flight.name),
+      el("span",{class:"gsd"}, s.flight.gsd_cm!=null ? `${s.flight.gsd_cm} cm · round ${s.round}` : `round ${s.round}`) ]),
+    el("div",{class:"summary"},[
+      el("div",{},[ el("div",{class:"n teal"}, String(s.settled)), el("div",{class:"lbl"},"settled superpixels") ]),
+      el("div",{},[ el("div",{class:"n amber"}, String(s.open_questions)), el("div",{class:"lbl"},`open this round`) ]),
+      el("div",{},[ el("div",{class:"n"}, `${pct}%`), el("div",{class:"lbl"},"of round resolved") ]),
+    ]),
+    meter,
+    verdictsCard,
+    labelersCard,
+    el("p",{class:"task-stat", html:"A skip doesn't settle a superpixel, so skipped ones can return in a later round."}),
+  );
+}
+
+showWho();
+const flightId = params.get("flight");
+if (flightId) flightView(flightId);
+else chooser();
+</script>
+</body>
+</html>

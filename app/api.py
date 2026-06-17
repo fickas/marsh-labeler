@@ -309,6 +309,71 @@ def _recompute_verdict(db, flight_id: int, superpixel_id: int, replication_targe
         rl.class_id = None  # support insufficient/conflicting -> unresolved
 
 
+@router.get("/flights/{flight_id}/stats")
+def flight_stats(flight_id: int):
+    """Everything the progress page needs for one flight: round, the settled-vs-
+    open split, the verdict breakdown by class, and what each labeler has done."""
+    db = SessionLocal()
+    try:
+        flight = db.get(Flight, flight_id)
+        if flight is None:
+            raise HTTPException(404, "flight not found")
+        names, _ = _scheme(flight)
+        rnd = flight.active_round
+        prog = _flight_progress(db, flight_id, rnd)
+
+        vrows = db.execute(
+            select(ResolvedLabel.class_id, func.count())
+            .where(
+                ResolvedLabel.flight_id == flight_id,
+                ResolvedLabel.class_id.is_not(None),
+            )
+            .group_by(ResolvedLabel.class_id)
+        ).all()
+        verdicts = sorted(
+            (
+                {"class_id": cid, "name": names.get(cid, f"class {cid}"), "count": n}
+                for cid, n in vrows
+            ),
+            key=lambda r: -r["count"],
+        )
+
+        arows = db.execute(
+            select(User.email, Label.action, func.count())
+            .join(User, User.id == Label.user_id)
+            .where(Label.flight_id == flight_id)
+            .group_by(User.email, Label.action)
+        ).all()
+        by_user: dict[str, dict] = {}
+        for email, action, n in arows:
+            d = by_user.setdefault(
+                email, {"label": 0, "skip": 0, "split": 0, "other": 0, "total": 0}
+            )
+            d[action] = d.get(action, 0) + n
+            d["total"] += n
+        labelers = [
+            {"email": e, **d}
+            for e, d in sorted(by_user.items(), key=lambda kv: -kv[1]["total"])
+        ]
+
+        return {
+            "flight": {
+                "id": flight.id,
+                "name": flight.name,
+                "gsd_cm": flight.gsd_cm,
+                "project_id": flight.project_id,
+            },
+            "round": rnd,
+            "open_questions": prog["open_questions"],
+            "settled": prog["settled"],
+            "scheme": {"names": {str(k): v for k, v in names.items()}},
+            "verdicts": verdicts,
+            "labelers": labelers,
+        }
+    finally:
+        db.close()
+
+
 class LabelIn(BaseModel):
     container_id: int
     user: str

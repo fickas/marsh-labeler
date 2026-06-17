@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marsh Labeler — Tasks</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="/">Marsh Labeler</a>
+  <nav class="nav"><a href="/" class="on">Tasks</a><a href="/progress">Progress</a></nav>
+  <span class="spacer"></span>
+  <span class="who" id="who"></span>
+  <button class="link" id="changeUser" hidden>change</button>
+</header>
+
+<main id="main">
+  <p class="tagline">Pick a task to label, or check progress.</p>
+  <div id="projects"></div>
+</main>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+function el(tag, attrs={}, kids=[]) {
+  const e = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "html") e.innerHTML = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) e.setAttribute(k, v);
+  }
+  for (const c of [].concat(kids)) e.append(c);
+  return e;
+}
+async function api(path) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r.json();
+}
+
+// identity is shared app-wide via the same localStorage key the labeler uses.
+function showWho() {
+  const u = localStorage.getItem("ml_user");
+  if (u) { $("#who").textContent = "labeling as "; $("#who").append(el("b",{},u));
+           $("#changeUser").hidden = false; }
+}
+$("#changeUser").addEventListener("click", () => {
+  const v = prompt("Label as which email?", localStorage.getItem("ml_user") || "");
+  if (v && v.trim()) { localStorage.setItem("ml_user", v.trim()); location.reload(); }
+});
+
+function gsdLabel(f) { return f.gsd_cm != null ? `${f.gsd_cm} cm` : "flight"; }
+
+function taskCard(f) {
+  const settled = f.progress.settled, open = f.progress.open_questions;
+  const denom = settled + open;
+  const pct = denom ? Math.round((settled / denom) * 100) : 0;
+  const meter = denom
+    ? el("div",{class:"meter"},[
+        el("span",{class:"settled", style:`width:${pct}%`}),
+        el("span",{class:"open", style:`width:${100-pct}%`}) ])
+    : el("div",{class:"meter empty"});
+  const stat = denom
+    ? el("div",{class:"task-stat"},[ el("b",{}, String(settled)),
+        document.createTextNode(` settled · ${open} open this round`) ])
+    : el("div",{class:"task-stat"}, "no open questions yet");
+  return el("a",{class:"task", href:`/label?flight=${f.id}`},[
+    el("div",{class:"task-top"},[
+      el("span",{class:"gsd"}, gsdLabel(f)),
+      el("span",{class:"round"}, `round ${f.active_round}`) ]),
+    el("div",{class:"task-name"}, f.name),
+    meter, stat,
+    el("div",{class:"task-go"}, "Label →"),
+  ]);
+}
+
+async function load() {
+  showWho();
+  let projects;
+  try { projects = await api("/api/projects"); }
+  catch (e) { $("#projects").replaceChildren(el("div",{class:"empty"},
+    "Couldn't reach the server. Is the app running?")); return; }
+
+  const hasFlights = projects.some(p => p.flights.length);
+  if (!hasFlights) {
+    $("#projects").replaceChildren(el("div",{class:"empty"},[
+      el("p",{html:"No tasks yet. Ingest a flight, or run "}),
+      el("p",{}, el("code",{},"python seed.py")),
+      el("p",{html:"for a demo flight, then reload."}),
+    ]));
+    return;
+  }
+
+  const wrap = el("div");
+  for (const p of projects) {
+    if (!p.flights.length) continue;
+    const head = el("div",{class:"project-head"},[ el("h2",{}, p.name) ]);
+    if (p.id != null)
+      head.append(el("a",{href:`/progress?project=${p.id}`}, "progress →"));
+    wrap.append(el("section",{class:"project"},[
+      head,
+      el("div",{class:"tasks"}, p.flights.map(taskCard)),
+    ]));
+  }
+  $("#projects").replaceChildren(wrap);
+}
+load();
+</script>
+</body>
+</html>
