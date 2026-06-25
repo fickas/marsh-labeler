@@ -43,12 +43,18 @@ class FlightInputs:
     round: int = 1
     abstain_path: str | None = None
     softmax_path: str | None = None   # optional; enables per-container model_probs
+    # optional JSON written by the production notebook (write_selection_params):
+    # the abstain-rule values + one real example pixel. Stored on the flight and
+    # rendered as the "Why this tile?" panel.
+    selection_params_path: str | None = None
     gsd_cm: float | None = None
     # per-flight class scheme: {"names": {id: name}, "damage": [ids],
     # "ignore_index": int}. None falls back to constants.DEFAULT_SCHEME (synthetic).
     classes: dict | None = None
     views: list[ViewSpec] = field(default_factory=list)
-    context_pad_px: int = 64  # surrounding context rendered around each container
+    context_pad_px: int = 64  # legacy; container chips now use window_m
+    window_m: float = 2.0     # fixed chip window side (map units), centered on the
+                              # container, so small superpixels still get context
     replication_target: int = 1
 
     # Reference exemplars (ingest_exemplars.py). Built from a class-labeled

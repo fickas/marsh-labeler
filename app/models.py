@@ -48,7 +48,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 SRID = 26919
 
 ROLES = ("labeler", "admin", "ecologist")
-ACTIONS = ("label", "skip", "split", "other")
+ACTIONS = ("label", "skip", "split", "out_of_scope")
 STATUSES = ("pending", "in_progress", "done", "skipped")
 RESOLVE_METHODS = ("single", "majority", "adjudicated")
 
@@ -99,6 +99,11 @@ class Flight(Base):
     # per-flight on purpose: a project's 1cm and 4cm flights can use different
     # models with different schemes.
     class_scheme = mapped_column(JSONB, nullable=True)
+    # how the labeler queue was built for THIS flight: the abstain rule values
+    # (min_margin, mass_cutoff, min_abstain_frac, window_m) plus one real example
+    # pixel, captured by the production notebook. Drives the "Why this tile?" panel
+    # so the explanation tracks the actual run instead of drifting in the UI.
+    selection_params = mapped_column(JSONB, nullable=True)
     # which round's containers the labeler queue currently serves. Bumped by each
     # retrain's ingest; old rounds' containers may linger for history but are not
     # served.
@@ -156,6 +161,11 @@ class Container(Base):
     model_probs = mapped_column(JSONB, nullable=True)
     # rendered chip views: {"truecolor": url, "cir": url, "geomorphic": url, ...}
     chip_keys = mapped_column(JSONB, nullable=True)
+    # per-superpixel decomposition the labeler sees: total pixels, the
+    # confident-class breakdown, and the abstain "questions" (contested-pair
+    # counts) + diffuse count. Computed at ingest from the abstain + softmax
+    # rasters (see ingest._pixel_stats) -- the honest breakdown behind the mean.
+    composition = mapped_column(JSONB, nullable=True)
 
     # serving order: higher = labeled sooner (see app.constants.pair_priority).
     priority: Mapped[float] = mapped_column(Float, default=0.0, index=True)
@@ -245,9 +255,11 @@ class ResolvedLabel(Base):
 
     This is the layer that rasterizes back onto the superpixel raster to build a
     training mask, and the layer the queue checks to retire settled superpixels.
-    Once class_id is set, that superpixel is done: it will not be re-asked in any
-    future round. A "skip" never produces a verdict, so genuinely-skipped
-    superpixels can resurface in a later round.
+    A superpixel is RETIRED (never re-asked, in any round, for anyone) once it is
+    either resolved to a class (class_id set) OR marked out of scope. A "skip"
+    never produces a verdict, so genuinely-skipped superpixels can resurface in a
+    later round. out_of_scope rows carry class_id=None: they're excluded from GT
+    and training, not labeled as a class.
     """
 
     __tablename__ = "resolved_labels"
@@ -257,11 +269,22 @@ class ResolvedLabel(Base):
     )
     superpixel_id: Mapped[int] = mapped_column(Integer, primary_key=True)
     class_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # null = unresolved
+    # True = labeler marked this superpixel out of scope (water, mudflat, image
+    # edge, junk). Retires it for everyone, but it is NOT a class: kept out of GT
+    # and training. Mutually exclusive with class_id in practice.
+    out_of_scope: Mapped[bool] = mapped_column(Boolean, default=False)
     method: Mapped[str] = mapped_column(String, default="single")
     resolved_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )
     is_gold: Mapped[bool] = mapped_column(Boolean, default=False)
+    # When the verdict first came into existence. Stable -- no onupdate -- so it
+    # is the correct snapshot key for "training set as of T". updated_at moves
+    # whenever a verdict is re-touched (e.g. adjudication), so it must NOT be
+    # used to decide which verdicts existed at a past point in time.
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

@@ -29,7 +29,7 @@ classes:
 # Reference gallery, built by ingest_exemplars.py from your class-labeled
 # polygons (rendered with the same views as the containers).
 labeled_polygons: /data/30jun23/labels.gpkg
-label_class_field: class
+label_class_field: class_id
 examples_per_class: 5
 exemplar_crop_px: 128       # interior window side in px; tune to match container chip zoom
 # exemplar_curated:         # optional: hand-pick polygon indices per class

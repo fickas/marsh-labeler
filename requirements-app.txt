@@ -1,0 +1,13 @@
+# Runtime deps for the DEPLOYED web service only. The running app serves the API
+# and pages and reads Postgres -- it does NOT render chips or read rasters, so the
+# heavy geo/ingest stack (rasterio, geopandas, shapely, matplotlib, numpy, boto3,
+# PyYAML) is intentionally absent. That keeps the Railway image slim and GDAL-free.
+#
+# Ingest/export run on your laptop against the full requirements.txt.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+SQLAlchemy>=2.0
+GeoAlchemy2>=0.14
+alembic>=1.13
+psycopg[binary]>=3.1
+pydantic-settings>=2.2

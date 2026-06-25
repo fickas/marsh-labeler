@@ -5,6 +5,7 @@ managed Postgres + object storage); only the env vars differ.
 """
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,19 @@ class Settings(BaseSettings):
 
     # Public URL prefix under which chips are served back to the browser.
     chip_base_url: str = "/chips"
+
+    @field_validator("database_url")
+    @classmethod
+    def _psycopg3_driver(cls, v: str) -> str:
+        # Railway injects DATABASE_URL as postgres:// or postgresql://, but we run
+        # the psycopg (v3) driver and don't install psycopg2. Pin the dialect so
+        # the same value works locally and on Railway with no hand-editing.
+        scheme, sep, rest = v.partition("://")
+        if not sep:
+            return v
+        if scheme in ("postgres", "postgresql"):
+            return f"postgresql+psycopg://{rest}"
+        return v
 
 
 settings = Settings()

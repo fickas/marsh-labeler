@@ -63,6 +63,91 @@ def _mean_probs(softmax_path: str, superpixel_path: str, superpixel_id: int):
         }
 
 
+_DIFFUSE_CODE = 100  # matches abstain.py
+
+
+def _pair_codes(n_classes):
+    """code (1..C(n,2)) -> (a, b), a < b. Mirrors abstain.py._pair_codes."""
+    import itertools
+
+    return {k + 1: pair for k, pair in enumerate(itertools.combinations(range(n_classes), 2))}
+
+
+def _load_stat_rasters(softmax_path, abstain_path, superpixel_path):
+    """Read the rasters needed for per-superpixel stats ONCE (not per superpixel).
+    Returns (softmax (C,H,W), abstain (H,W)|None, superpixel (H,W), valid (H,W),
+    pred (H,W)), or None when there's no softmax."""
+    import numpy as np
+    import rasterio
+
+    if not softmax_path:
+        return None
+    with rasterio.open(superpixel_path) as sp:
+        sp_arr = sp.read(1)
+    with rasterio.open(softmax_path) as sm:
+        sm_arr = sm.read().astype("float32")  # (C, H, W)
+    ab_arr = None
+    if abstain_path:
+        with rasterio.open(abstain_path) as ab:
+            ab_arr = ab.read(1)
+    valid = np.isfinite(sm_arr).all(axis=0) & (sm_arr.sum(axis=0) > 0.5)
+    pred = np.argmax(sm_arr, axis=0)  # confident class per pixel
+    return sm_arr, ab_arr, sp_arr, valid, pred
+
+
+def _pixel_stats(rasters, sp_id):
+    """(model_probs, composition) for one superpixel, from the once-loaded
+    rasters. model_probs = mean per-class softmax over the whole superpixel.
+    composition = the confident-vs-abstain decomposition the labeler sees:
+    total pixels, confident-class counts, and the abstain "questions" (contested
+    pair counts) + diffuse count -- the honest breakdown, not a blended mean."""
+    import numpy as np
+
+    sm_arr, ab_arr, sp_arr, valid, pred = rasters
+    C = sm_arr.shape[0]
+    mask = sp_arr == sp_id
+    if not mask.any():
+        return None, None
+
+    probs = {k: float(sm_arr[k][mask].mean()) for k in range(C)}
+    if ab_arr is None:
+        return probs, None
+
+    codes = ab_arr[mask]
+    vmask = valid[mask]
+    confident = (codes == 0) & vmask          # confident & real (not nodata)
+    diffuse = codes == _DIFFUSE_CODE
+    pair = (codes >= 1) & (codes < _DIFFUSE_CODE)
+
+    conf_counts = np.bincount(pred[mask][confident], minlength=C)
+    confident_list = sorted(
+        ({"c": int(k), "n": int(v)} for k, v in enumerate(conf_counts) if v),
+        key=lambda x: -x["n"],
+    )
+
+    code_to_pair = _pair_codes(C)
+    qcounts = np.bincount(codes[pair], minlength=_DIFFUSE_CODE + 1)
+    questions = sorted(
+        (
+            {"a": int(code_to_pair[code][0]), "b": int(code_to_pair[code][1]),
+             "n": int(qcounts[code])}
+            for code in range(1, _DIFFUSE_CODE)
+            if qcounts[code] and code in code_to_pair
+        ),
+        key=lambda x: -x["n"],
+    )
+
+    composition = {
+        "n": int(mask.sum()),
+        "n_confident": int(confident.sum()),
+        "n_abstain": int(pair.sum()),
+        "n_diffuse": int(diffuse.sum()),
+        "confident": confident_list,
+        "questions": questions,
+    }
+    return probs, composition
+
+
 def _i(v):
     return None if v is None else int(v)
 
@@ -96,6 +181,21 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
     inp = load_inputs(config_path)
     if round_override is not None:
         inp.round = round_override
+
+    from ingest.preflight import check_inputs
+    problems = check_inputs(inp)
+    if problems:
+        raise FileNotFoundError(
+            "preflight failed -- fix these before ingest (see RUNBOOK.md):\n  "
+            + "\n  ".join(problems)
+        )
+
+    selection_params = None
+    if inp.selection_params_path:
+        import json
+        with open(inp.selection_params_path) as f:
+            selection_params = json.load(f)
+
     gdf = gpd.read_file(inp.review_gpkg)
     missing = [
         c for c in REQUIRED_REVIEW_COLUMNS if c != "geometry" and c not in gdf.columns
@@ -127,6 +227,7 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
                 superpixel_path=inp.superpixel_path,
                 abstain_path=inp.abstain_path,
                 class_scheme=scheme,
+                selection_params=selection_params,
                 active_round=rnd,
             )
             session.add(flight)
@@ -134,6 +235,16 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
         else:
             if project is not None:
                 flight.project_id = project.id
+            # The ingest is the airlock that defines the canonical grid + sources,
+            # so refresh the raster paths on the flight even when it already exists
+            # (e.g. created by seed.py without them). Verdicts/export read these.
+            flight.superpixel_path = inp.superpixel_path
+            flight.ortho_path = inp.ortho_path
+            flight.abstain_path = inp.abstain_path
+            # refresh the queue-explanation only when this ingest supplied one,
+            # so a re-ingest without the JSON keeps the prior panel.
+            if selection_params is not None:
+                flight.selection_params = selection_params
             # Re-ingesting this round (or advancing to a new one): clear just this
             # round's containers and serve it. Labels/verdicts are keyed to the
             # superpixel, so this never touches answers.
@@ -147,18 +258,24 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
             for (sp,) in session.query(ResolvedLabel.superpixel_id)
             .filter(
                 ResolvedLabel.flight_id == flight.id,
-                ResolvedLabel.class_id.isnot(None),
+                (ResolvedLabel.class_id.isnot(None)) | (ResolvedLabel.out_of_scope.is_(True)),
             )
             .all()
         }
 
         # serve by whatever THIS flight calls damage (existing flight wins).
         damage = set((flight.class_scheme or scheme).get("damage", []))
-        # context padding in map units, from the ortho's pixel size (once).
+        # fixed chip window (map units), centered on each container; clamp to ortho.
+        half = inp.window_m / 2.0
         with rasterio.open(inp.ortho_path) as o:
-            pad = inp.context_pad_px * abs(o.res[0])
+            ob = o.bounds
 
         srid = _srid(inp.crs)
+        # Read the softmax/abstain/superpixel rasters ONCE for per-superpixel
+        # stats (mean probs + the confident/abstain composition).
+        stat_rasters = _load_stat_rasters(
+            inp.softmax_path, inp.abstain_path, inp.superpixel_path
+        )
         n_ingested = 0
         n_skipped = 0
         for _, row in gdf.iterrows():
@@ -171,21 +288,23 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
             class_a = None if is_diffuse else _i(row.get("class_a"))
             class_b = None if is_diffuse else _i(row.get("class_b"))
 
-            minx, miny, maxx, maxy = row.geometry.bounds
+            c = row.geometry.centroid
+            wb = (max(ob.left, c.x - half), max(ob.bottom, c.y - half),
+                  min(ob.right, c.x + half), min(ob.top, c.y + half))
             with tempfile.TemporaryDirectory() as tmp:
                 chip_keys = render_views(
                     inp.views,
                     inp.ortho_path,
-                    (minx - pad, miny - pad, maxx + pad, maxy + pad),
+                    wb,
                     tmp,
                     f"{inp.name}/r{rnd}/sp_{sp_id}",
                     put_chip,
+                    outline_path=inp.superpixel_path,
+                    outline_id=sp_id,
                 )
 
-            probs = (
-                _mean_probs(inp.softmax_path, inp.superpixel_path, sp_id)
-                if inp.softmax_path
-                else None
+            probs, composition = (
+                _pixel_stats(stat_rasters, sp_id) if stat_rasters else (None, None)
             )
 
             session.add(
@@ -203,6 +322,7 @@ def ingest(config_path: str, round_override: int | None = None) -> None:
                     class_b=class_b,
                     is_diffuse=is_diffuse,
                     model_probs=probs,
+                    composition=composition,
                     chip_keys=chip_keys,
                     priority=pair_priority(class_a, class_b, abstain_frac, damage),
                     replication_target=inp.replication_target,

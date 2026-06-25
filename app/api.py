@@ -72,7 +72,7 @@ def _flight_progress(db, flight_id: int, active_round: int) -> dict:
         .select_from(ResolvedLabel)
         .where(
             ResolvedLabel.flight_id == flight_id,
-            ResolvedLabel.class_id.is_not(None),
+            (ResolvedLabel.class_id.is_not(None)) | (ResolvedLabel.out_of_scope.is_(True)),
         )
     )
     return {"round": active_round, "open_questions": open_q or 0, "settled": settled or 0}
@@ -166,6 +166,7 @@ def list_flights():
                 "project_id": f.project_id,
                 "active_round": f.active_round,
                 "class_scheme": f.class_scheme,
+                "selection_params": f.selection_params,
             }
             for f in flights
         ]
@@ -191,10 +192,11 @@ def next_container(flight_id: int, user: str = Query(..., description="labeler e
         answered_by_me = select(Label.superpixel_id).where(
             Label.flight_id == flight_id, Label.user_id == u.id
         )
-        # superpixels with a gold verdict are settled permanently -- skip them.
+        # superpixels with a class verdict OR marked out of scope are retired
+        # permanently -- skip them for every user and every round.
         settled = select(ResolvedLabel.superpixel_id).where(
             ResolvedLabel.flight_id == flight_id,
-            ResolvedLabel.class_id.is_not(None),
+            (ResolvedLabel.class_id.is_not(None)) | (ResolvedLabel.out_of_scope.is_(True)),
         )
         # how many "label" answers each superpixel already has, for replication.
         label_counts = (
@@ -256,6 +258,7 @@ def next_container(flight_id: int, user: str = Query(..., description="labeler e
                 "class_a_name": names.get(c.class_a),
                 "class_b_name": names.get(c.class_b),
                 "model_probs": c.model_probs,
+                "composition": c.composition,
                 "chip_keys": c.chip_keys,
             },
             "exemplars": exemplars,
@@ -285,9 +288,32 @@ def _recompute_verdict(db, flight_id: int, superpixel_id: int, replication_targe
             Label.class_id.is_not(None),
         )
     ).all()
+    oos = db.scalar(
+        select(Label).where(
+            Label.flight_id == flight_id,
+            Label.superpixel_id == superpixel_id,
+            Label.action == "out_of_scope",
+        ).limit(1)
+    ) is not None
     rl = db.get(ResolvedLabel, (flight_id, superpixel_id))
     if rl is not None and rl.method == "adjudicated":
         return  # a human override stands; don't auto-touch it
+
+    if oos:
+        # Out of scope retires the superpixel (for everyone, every round) but is
+        # not a class: class_id stays null so it's excluded from GT and training.
+        if rl is None:
+            db.add(
+                ResolvedLabel(
+                    flight_id=flight_id,
+                    superpixel_id=superpixel_id,
+                    class_id=None,
+                    out_of_scope=True,
+                )
+            )
+        else:
+            rl.class_id, rl.out_of_scope = None, True
+        return
 
     classes = {r.class_id for r in rows}
     settled = len(classes) == 1 and len(rows) >= max(1, replication_target)
@@ -304,9 +330,9 @@ def _recompute_verdict(db, flight_id: int, superpixel_id: int, replication_targe
                 )
             )
         else:
-            rl.class_id, rl.method = cid, method
+            rl.class_id, rl.method, rl.out_of_scope = cid, method, False
     elif rl is not None:
-        rl.class_id = None  # support insufficient/conflicting -> unresolved
+        rl.class_id, rl.out_of_scope = None, False  # support gone -> unresolved
 
 
 @router.get("/flights/{flight_id}/stats")
@@ -347,7 +373,7 @@ def flight_stats(flight_id: int):
         by_user: dict[str, dict] = {}
         for email, action, n in arows:
             d = by_user.setdefault(
-                email, {"label": 0, "skip": 0, "split": 0, "other": 0, "total": 0}
+                email, {"label": 0, "skip": 0, "split": 0, "out_of_scope": 0, "total": 0}
             )
             d[action] = d.get(action, 0) + n
             d["total"] += n

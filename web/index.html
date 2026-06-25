@@ -61,6 +61,14 @@
   .probs .bar { flex: 1; height: 8px; background: var(--panel2); border-radius: 4px; overflow: hidden; }
   .probs .bar span { display: block; height: 100%; }
   .probs .val { width: 3rem; font-family: var(--mono); }
+  .comp { margin-top: .6rem; font-size: .8rem; }
+  .comp-head { font-family: var(--mono); color: var(--muted); margin-bottom: .35rem; }
+  .comp-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: .35rem; margin: .25rem 0; }
+  .comp-lbl { color: var(--muted); width: 4.2rem; text-align: right; flex: none; font-size: .74rem; }
+  .comp .ctag { display: inline-block; background: var(--panel2); border-radius: 4px;
+                padding: .12rem .45rem; font-family: var(--mono); font-size: .74rem; line-height: 1.5; }
+  .comp .ctag.muted { color: var(--muted); }
+  .comp-hint { margin-top: .5rem; padding-left: .5rem; border-left: 2px solid var(--a); font-style: italic; }
 
   .actions { margin-top: 1.1rem; }
   .sides { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
@@ -104,7 +112,7 @@
 
 <script>
 const API = "";
-let state = { flightId: null, scheme: null, view: "truecolor", current: null,
+let state = { flightId: null, scheme: null, selection: null, view: "truecolor", current: null,
               user: localStorage.getItem("ml_user") || "" };
 
 const $ = (s, r=document) => r.querySelector(s);
@@ -151,7 +159,7 @@ async function start() {
       "No flights yet. Seed one with python seed.py, then reload.")); return; }
   const want = new URLSearchParams(location.search).get("flight");
   const f = (want && flights.find(x => String(x.id) === String(want))) || flights[0];
-  state.flightId = f.id; state.scheme = f.class_scheme;
+  state.flightId = f.id; state.scheme = f.class_scheme; state.selection = f.selection_params;
   $("#flightName").textContent = f.name;
   loadNext();
 }
@@ -197,6 +205,114 @@ function probRow(classId) {
   ]);
 }
 
+// All classes, highest mean first, so it's clear where the probability mass
+// sits. The contested pair stays color-highlighted (teal/amber) wherever it
+// lands; everything else is muted. These are means over the whole superpixel --
+// the per-pixel margin that triggered the question is summarized by `abstain %`.
+function probRows() {
+  const c = state.current.container;
+  const p = id => (c.model_probs && (c.model_probs[String(id)] ?? c.model_probs[id])) || 0;
+  const ids = Object.keys(names()).map(Number).sort((x,y) => p(y) - p(x));
+  return ids.map(probRow);
+}
+
+// The honest decomposition: how the superpixel's pixels split into confident
+// (broken down by class) vs the abstain "questions" (contested-pair counts) vs
+// diffuse -- plus a suggested read. Falls back to the mean bars if a flight was
+// ingested without an abstain raster (so no composition was computed).
+function compHint(comp, c, nm) {
+  if (!comp || !comp.confident || comp.confident.length === 0)
+    return "little confident signal here — judge from the imagery and exemplars.";
+  const top = comp.confident[0];
+  const topName = nm[top.c] || `class ${top.c}`;
+  const confPurity = comp.n_confident ? top.n / comp.n_confident : 0;
+  const confShare = comp.n ? comp.n_confident / comp.n : 0;
+  const domQ = (comp.questions && comp.questions[0]) || null;
+  const inQ = domQ && (domQ.a === top.c || domQ.b === top.c);
+  const sig = comp.confident.filter(x => x.n / comp.n_confident >= 0.2);
+  if (sig.length >= 2)
+    return "confident pixels span more than one class — this patch may straddle a boundary; consider Needs split.";
+  if (confPurity >= 0.9 && confShare >= 0.2 && inQ) {
+    const other = nm[domQ.a === top.c ? domQ.b : domQ.a] || "the other class";
+    return `likely ${topName} — confident pixels are almost all ${topName}, and the unsure ones are torn between it and ${other}.`;
+  }
+  if (comp.n_diffuse && comp.n_diffuse >= comp.n_abstain)
+    return "diffuse uncertainty — the model has no clear top two here; judge from the imagery.";
+  return `leans ${topName}, but not cleanly — weigh the imagery and exemplars.`;
+}
+
+function compPanel() {
+  const c = state.current.container;
+  const comp = c.composition;
+  if (!comp)
+    return el("div",{class:"probs"},[
+      el("div",{style:"font-size:.7rem;color:var(--muted);margin-bottom:.2rem"},
+        "model mean over superpixel"),
+      ...probRows(),
+    ]);
+  const nm = names();
+  const color = id => id === c.class_a ? "var(--a)" : (id === c.class_b ? "var(--b)" : "var(--muted)");
+  const head = el("div",{class:"comp-head"},
+    `${comp.n} px · ${comp.n_confident} confident · ${comp.n_abstain} unsure`
+    + (comp.n_diffuse ? ` · ${comp.n_diffuse} diffuse` : ""));
+  const confChips = (comp.confident||[]).map(x =>
+    el("span",{class:"ctag", style:`color:${color(x.c)}`}, `${nm[x.c]||('class '+x.c)} ${x.n}`));
+  const conf = el("div",{class:"comp-row"},
+    [el("span",{class:"comp-lbl"},"confident:")].concat(
+      confChips.length ? confChips : [el("span",{class:"ctag muted"},"none")]));
+  const qChips = (comp.questions||[]).map(x =>
+    el("span",{class:"ctag"}, `${nm[x.a]||('c'+x.a)} vs ${nm[x.b]||('c'+x.b)} ×${x.n}`));
+  if (comp.n_diffuse) qChips.push(el("span",{class:"ctag muted"}, `diffuse ×${comp.n_diffuse}`));
+  const q = el("div",{class:"comp-row"},
+    [el("span",{class:"comp-lbl"},"asking:")].concat(
+      qChips.length ? qChips : [el("span",{class:"ctag muted"},"none")]));
+  const hint = el("div",{class:"comp-hint"}, "→ " + compHint(comp, c, nm));
+  return el("div",{class:"comp"},[head, conf, q, hint]);
+}
+
+// "Why this tile?" -- collapsible, rendered from the flight's selection_params
+// (the abstain-rule values + one real example pixel captured at ingest). Class
+// names come from the flight scheme (names()), the single source on the app.
+function whyPanel() {
+  const s = state.selection;
+  if (!s || !s.rule) return null;
+  const r = s.rule, nm = names();
+  const pct = x => `${Math.round(x * 100)}%`;
+  const pts = x => `${Math.round(x * 100)} points`;
+  const kids = [
+    el("summary", {style:"cursor:pointer;color:var(--a);font-size:13px"}, "Why this tile?"),
+    el("p", {style:"margin:8px 0;color:var(--muted);font-size:13px;line-height:1.5"},
+      `First, and only once, the entire raster is split into tiles or Superpixels. A model is trained and used to predict every pixel on the raster. When a pixel's `
+      + `top two guesses are within ${pts(r.min_margin)} of each other and together `
+      + `cover at least ${pct(r.mass_cutoff)} of the probability, it's too close to `
+      + `call and that pixel gets flagged. Now all tiles are checked to see if flagged pixels have landed in them. `
+      + `A tile is shown to you if at least ${pct(r.min_abstain_frac)} of its pixels consist of flagged pixels. The tile is shown in outline form within a slightly larger ~${r.window_m} m view.. `
+      + `Then it's your call. If you choose a class as the label, the entire tile (all of its pixels) are labeled with that class, i.e., you are saying the entire tile is of a single class. `
+      + `If you instead decide the tile holds pixels of mixed classes, then you would choose the Split option. You also have the option to Skip if you would rather not make a decision at this point. `
+      + `The Out of scope choice allows you to mark tiles that should be taken out of consideration in general, e.g., out of bounds of the marsh. `
+      + `The tiles that you do label will eventually be added to Ground Truth and can be used in subsequent training runs.`),
+  ];
+  const ex = s.example;
+  if (ex && ex.probs) {
+    const pair = ex.pair || [];
+    const rows = ex.probs.map((p, i) => {
+      const hot = pair.includes(i);
+      return el("div", {style:"display:flex;justify-content:space-between;padding:2px 8px;"
+          + "font-size:12px;border-radius:4px;"
+          + (hot ? "background:rgba(255,255,255,.08);font-weight:600" : "")},
+        [ el("span", {}, nm[i] || `class ${i}`), el("span", {}, pct(p)) ]);
+    });
+    const an = nm[pair[0]] || `class ${pair[0]}`, bn = nm[pair[1]] || `class ${pair[1]}`;
+    kids.push(el("p", {style:"margin:8px 0 4px;color:var(--muted);font-size:13px"},
+      "An example pixel the model flagged:"));
+    kids.push(el("div", {style:"max-width:300px"}, rows));
+    kids.push(el("p", {style:"margin:6px 0 0;color:var(--muted);font-size:13px;line-height:1.5"},
+      `The top two (${an}, ${bn}) are clearly above the rest but only `
+      + `${pts(ex.top2_margin)} apart — too close to call — so this pixel was flagged.`));
+  }
+  return el("details", {style:"max-width:560px;margin:6px auto 0;text-align:left"}, kids);
+}
+
 function render() {
   const c = state.current.container;
   const aName = c.class_a_name || `class ${c.class_a}`;
@@ -210,7 +326,7 @@ function render() {
   const center = el("div",{class:"center"},[
     el("img",{class:"chip", src:chipUrl(c.chip_keys), alt:"container chip"}),
     views,
-    el("div",{class:"probs"},[probRow(c.class_a), probRow(c.class_b)]),
+    compPanel(),
     el("div",{class:"meta"},[
       el("span",{}, `sp ${c.superpixel_id}`),
       el("span",{}, `abstain ${(c.abstain_frac*100).toFixed(0)}%`),
@@ -232,15 +348,18 @@ function render() {
 
   const escape = el("div",{class:"escape"},[
     el("button",{onclick:()=>answer("skip")}, [document.createTextNode("Skip "), el("span",{class:"key"},"s")]),
-    el("button",{onclick:()=>answer("other")}, [document.createTextNode("None / background "), el("span",{class:"key"},"o")]),
+    el("button",{onclick:()=>answer("out_of_scope")}, [document.createTextNode("Out of scope "), el("span",{class:"key"},"o")]),
     el("button",{onclick:()=>answer("split")}, [document.createTextNode("Needs split "), el("span",{class:"key"},"x")]),
   ]);
 
-  $("#main").replaceChildren(
+  const blocks = [
     el("p",{class:"ask", html:`Model can't decide. Is this <b class="l">${aName}</b> or <b class="r">${bName}</b>?`}),
-    el("div",{class:"triptych"},[ gallery("l", c.class_a), center, gallery("r", c.class_b) ]),
-    el("div",{class:"actions"},[ sides, palette, escape ]),
-  );
+  ];
+  const why = whyPanel();
+  if (why) blocks.push(why);
+  blocks.push(el("div",{class:"triptych"},[ gallery("l", c.class_a), center, gallery("r", c.class_b) ]));
+  blocks.push(el("div",{class:"actions"},[ sides, palette, escape ]));
+  $("#main").replaceChildren(...blocks);
 }
 
 async function answer(action, classId=null) {
@@ -256,7 +375,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "1") answer("label", c.class_a);
   else if (e.key === "2") answer("label", c.class_b);
   else if (e.key === "s") answer("skip");
-  else if (e.key === "o") answer("other");
+  else if (e.key === "o") answer("out_of_scope");
   else if (e.key === "x") answer("split");
 });
 

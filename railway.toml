@@ -1,0 +1,10 @@
+# Railway picks up the Dockerfile automatically; this just makes the deploy
+# wait for the app to be healthy and restart it on crash.
+[build]
+builder = "dockerfile"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 120
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3

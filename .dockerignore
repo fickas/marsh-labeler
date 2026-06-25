@@ -1,0 +1,17 @@
+# Keep the build context small and secret-free. None of this belongs in the image:
+# the deployed app never reads rasters/chips (those are R2 + laptop), and creds
+# must come from Railway env vars, not a baked-in .env.
+.venv
+__pycache__
+*.pyc
+.git
+.gitignore
+.env
+.env.*
+_chips
+data
+*.tif
+*.gpkg
+*.qml
+*.stretch.json
+.DS_Store
