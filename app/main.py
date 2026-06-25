@@ -6,16 +6,45 @@ three pages: the tasks landing (/), the labeler (/label?flight=ID), and progress
 """
 from __future__ import annotations
 
+import base64
 import os
+import secrets
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from .api import router
 from .config import settings
 
 app = FastAPI(title="Marsh Labeler")
+
+
+# --- HTTP Basic Auth gate -------------------------------------------------
+# Active only when both credentials are configured (set on Railway, unset in
+# local dev). /health is always exempt so Railway's health check can reach the
+# app without credentials -- gating it would make the service look unhealthy.
+@app.middleware("http")
+async def _basic_auth(request: Request, call_next):
+    user, pw = settings.basic_auth_user, settings.basic_auth_pass
+    if not user or not pw or request.url.path == "/health":
+        return await call_next(request)
+
+    header = request.headers.get("Authorization", "")
+    if header.startswith("Basic "):
+        try:
+            got_user, _, got_pw = base64.b64decode(header[6:]).decode().partition(":")
+            # constant-time compares so a probe can't time its way to the secret
+            if secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pw, pw):
+                return await call_next(request)
+        except Exception:
+            pass
+    return Response(
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="Marsh Labeler"'},
+    )
+
+
 app.include_router(router)
 
 _WEB = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")

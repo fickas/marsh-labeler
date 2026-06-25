@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     # Public URL prefix under which chips are served back to the browser.
     chip_base_url: str = "/chips"
 
+    # Optional HTTP Basic Auth gate. When BOTH are set (e.g. on Railway), every
+    # request except /health requires these credentials -- a single shared
+    # username/password that keeps the public URL closed to strangers and bots.
+    # Left unset (local dev), the gate is disabled and the app is open.
+    basic_auth_user: str | None = None
+    basic_auth_pass: str | None = None
+
     @field_validator("database_url")
     @classmethod
     def _psycopg3_driver(cls, v: str) -> str:
