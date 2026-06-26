@@ -21,21 +21,24 @@ app = FastAPI(title="Marsh Labeler")
 
 
 # --- HTTP Basic Auth gate -------------------------------------------------
-# Active only when both credentials are configured (set on Railway, unset in
-# local dev). /health is always exempt so Railway's health check can reach the
-# app without credentials -- gating it would make the service look unhealthy.
+# One shared secret: the PASSWORD. The username can be anything -- whatever the
+# labeler types at the browser prompt becomes their identity (see /whoami), so
+# there's no separate in-app username step. Active only when basic_auth_pass is
+# set (on Railway; unset in local dev). /health is always exempt so Railway's
+# health check can reach the app without credentials.
 @app.middleware("http")
 async def _basic_auth(request: Request, call_next):
-    user, pw = settings.basic_auth_user, settings.basic_auth_pass
-    if not user or not pw or request.url.path == "/health":
+    pw = settings.basic_auth_pass
+    if not pw or request.url.path == "/health":
         return await call_next(request)
 
     header = request.headers.get("Authorization", "")
     if header.startswith("Basic "):
         try:
             got_user, _, got_pw = base64.b64decode(header[6:]).decode().partition(":")
-            # constant-time compares so a probe can't time its way to the secret
-            if secrets.compare_digest(got_user, user) and secrets.compare_digest(got_pw, pw):
+            # any non-empty username; constant-time check on the password only
+            if got_user and secrets.compare_digest(got_pw, pw):
+                request.state.auth_user = got_user
                 return await call_next(request)
         except Exception:
             pass
@@ -57,6 +60,13 @@ def _page(name: str) -> FileResponse:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/whoami")
+def whoami(request: Request) -> dict[str, str]:
+    # The username typed at the Basic Auth prompt, surfaced to the front end so
+    # it can label as that identity. Empty when the gate is off (local dev).
+    return {"user": getattr(request.state, "auth_user", "")}
 
 
 # Serve chips locally. With the S3/R2 backend, chip_keys are absolute URLs and

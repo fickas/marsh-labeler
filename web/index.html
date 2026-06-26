@@ -282,15 +282,13 @@ function whyPanel() {
   const kids = [
     el("summary", {style:"cursor:pointer;color:var(--a);font-size:13px"}, "Why this tile?"),
     el("p", {style:"margin:8px 0;color:var(--muted);font-size:13px;line-height:1.5"},
-      `First, and only once, the entire raster is split into tiles or Superpixels. A model is trained and used to predict every pixel on the raster. When a pixel's `
+      `The model predicted a class for every pixel in the flight. When a pixel's `
       + `top two guesses are within ${pts(r.min_margin)} of each other and together `
       + `cover at least ${pct(r.mass_cutoff)} of the probability, it's too close to `
-      + `call and that pixel gets flagged. Now all tiles are checked to see if flagged pixels have landed in them. `
-      + `A tile is shown to you if at least ${pct(r.min_abstain_frac)} of its pixels consist of flagged pixels. The tile is shown in outline form within a slightly larger ~${r.window_m} m view.. `
-      + `Then it's your call. If you choose a class as the label, the entire tile (all of its pixels) are labeled with that class, i.e., you are saying the entire tile is of a single class. `
-      + `If you instead decide the tile holds pixels of mixed classes, then you would choose the Split option. You also have the option to Skip if you would rather not make a decision at this point. `
-      + `The Out of scope choice allows you to mark tiles that should be taken out of consideration in general, e.g., out of bounds of the marsh. `
-      + `The tiles that you do label will eventually be added to Ground Truth and can be used in subsequent training runs.`),
+      + `call and gets flagged. Flagged pixels are grouped into ~${r.window_m} m tiles, `
+      + `and a tile is shown to you once at least ${pct(r.min_abstain_frac)} of it is `
+      + `flagged. Tiles the model was confident about, and ground already hand-labeled, `
+      + `are skipped.`),
   ];
   const ex = s.example;
   if (ex && ex.probs) {
@@ -381,7 +379,24 @@ document.addEventListener("keydown", (e) => {
 
 $("#changeUser").addEventListener("click", () => { localStorage.removeItem("ml_user"); state.user=""; gate(); });
 
-state.user ? start() : gate();
+// If we're behind the Basic Auth door, whatever username was typed at the prompt
+// is our identity -- use it and skip the manual entry. /whoami returns "" when
+// the gate is off (local dev), in which case fall back to the username form.
+async function boot() {
+  try {
+    const r = await fetch(API + "/whoami");
+    if (r.ok) {
+      const { user } = await r.json();
+      if (user) {
+        state.user = user;
+        localStorage.setItem("ml_user", user);
+        return start();
+      }
+    }
+  } catch (e) { /* no gate / offline: fall through to manual entry */ }
+  state.user ? start() : gate();
+}
+boot();
 </script>
 </body>
 </html>
