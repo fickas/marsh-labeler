@@ -10,7 +10,7 @@ import base64
 import os
 import secrets
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -69,9 +69,41 @@ def whoami(request: Request) -> dict[str, str]:
     return {"user": getattr(request.state, "auth_user", "")}
 
 
-# Serve chips locally. With the S3/R2 backend, chip_keys are absolute URLs and
-# this mount is unused.
-if settings.storage_backend == "local":
+# Chip serving. The bucket is private (no public URL), so on the s3 backend the
+# app proxies reads: GET /chips/<key> -> fetch from the bucket -> stream back.
+# In local dev, chips are files under storage_local_dir, served by a static mount.
+if settings.storage_backend == "s3":
+    _s3_client = None
+
+    def _s3():
+        global _s3_client
+        if _s3_client is None:
+            import boto3
+
+            _s3_client = boto3.client(
+                "s3",
+                endpoint_url=settings.storage_s3_endpoint,
+                aws_access_key_id=settings.storage_s3_access_key,
+                aws_secret_access_key=settings.storage_s3_secret_key,
+                region_name=settings.storage_s3_region,
+            )
+        return _s3_client
+
+    @app.get("/chips/{key:path}")
+    def serve_chip(key: str) -> Response:
+        try:
+            obj = _s3().get_object(Bucket=settings.storage_s3_bucket, Key=key)
+            data = obj["Body"].read()
+        except Exception:
+            raise HTTPException(status_code=404, detail="chip not found")
+        # chips are immutable once written, so let the browser cache them
+        return Response(
+            content=data,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+elif settings.storage_backend == "local":
     os.makedirs(settings.storage_local_dir, exist_ok=True)
     app.mount("/chips", StaticFiles(directory=settings.storage_local_dir), name="chips")
 

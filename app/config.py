@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     storage_s3_endpoint: str | None = None
     storage_s3_access_key: str | None = None
     storage_s3_secret_key: str | None = None
+    storage_s3_region: str = "auto"
 
     # Public URL prefix under which chips are served back to the browser.
     chip_base_url: str = "/chips"
